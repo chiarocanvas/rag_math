@@ -309,76 +309,62 @@ class LlmBot:
             formatted.append({"role": role, "content": entry["content"]})
         return formatted
 
-    def clean_latex_for_matplotlib(self, formula: str) -> str:
-        """Более мягкая очистка LaTeX для matplotlib"""
-        if not formula:
-            return ""
-        # Удаляем только внешние $$ и \[ \]
-        formula = re.sub(r'^\$\$+|\$\$+$', '', formula)
-        formula = re.sub(r'^\\\[|\\\]$', '', formula)
-        # Сохраняем важные окружения
-        if re.search(r'\\begin\{(align|equation|gather)\}', formula):
-            return formula
-        # Заменяем только проблемные команды
-        formula = formula.replace('\\left', '').replace('\\right', '')
-        formula = formula.replace('\\displaystyle', '')
-        # Удаляем \text{...}
-        formula = re.sub(r'\\text\{([^}]+)\}', r'\1', formula)
-        return formula.strip()
 
     def strip_html_tags(self, text: str) -> str:
         """Удаляет HTML-теги из строки."""
         return re.sub(r'<[^>]+>', '', text)
 
-    def is_latex_formula(self, text: str) -> bool:
-        """Проверяет, похожа ли строка на LaTeX-формулу."""
-        # Признаки LaTeX: \, ^, _, {, }, математические команды
-        return bool(re.search(r'\\|\^|_|\{|\}|\\frac|\\sqrt|\\sum|\\int|\\left|\\right|\\begin|\\end', text))
 
     async def render_latex_formula_as_image(self, formula: str, output_path: str = "formula.png"):
-        """Renders a LaTeX formula as an image using matplotlib's mathtext (no external LaTeX required)."""
-        import matplotlib
+        """Рендерит LaTeX формулу в изображение с помощью matplotlib"""
         import matplotlib.pyplot as plt
-        from matplotlib import rcParams
-        import numpy as np
-        import os
         
-        # Clean the formula for matplotlib
-        formula = self.clean_latex_for_matplotlib(formula)
-        if not formula:
-            raise ValueError("Пустая формула для рендеринга.")
-
-        # Set up matplotlib for Russian and math
-        rcParams['font.family'] = 'DejaVu Sans'
-        rcParams['mathtext.fontset'] = 'dejavusans'
-        rcParams['axes.unicode_minus'] = False
-        rcParams['figure.dpi'] = 200
-        rcParams['savefig.dpi'] = 200
-        rcParams['text.usetex'] = False
-
-        # Create figure and axis
-        fig, ax = plt.subplots(figsize=(0.01, 0.01))
+        # Очистка формулы от лишних символов
+        formula = formula.strip()
+        # Удаление $$ если есть
+        if formula.startswith('$$') and formula.endswith('$$'):
+            formula = formula[2:-2]
+        # Удаление одиночных $ если есть
+        if formula.startswith('$') and formula.endswith('$'):
+            formula = formula[1:-1]
+        # Удаление всего после последнего $
+        last_dollar = formula.rfind('$')
+        if last_dollar != -1:
+            formula = formula[:last_dollar+1]
+        
+        # Создаем фигуру с прозрачным фоном
+        fig = plt.figure(figsize=(1, 1), dpi=300)
+        ax = fig.add_subplot(111)
         ax.axis('off')
         
-        # Render the formula
         try:
-            text_obj = ax.text(0, 0, f"${formula}$", fontsize=22, ha='left', va='bottom', wrap=True)
+            # Рендерим формулу
+            t = ax.text(0.5, 0.5, f"${formula}$", 
+                        fontsize=24, 
+                        ha='center', 
+                        va='center',
+                        transform=ax.transAxes)
+            
+            # Рассчитываем размеры
             fig.canvas.draw()
-            bbox = text_obj.get_window_extent(renderer=fig.canvas.get_renderer())
+            bbox = t.get_window_extent()
             width, height = bbox.width / fig.dpi, bbox.height / fig.dpi
-            fig.set_size_inches(width + 0.2, height + 0.2)
-            ax.set_position([0, 0, 1, 1])
-            ax.set_xlim(0, 1)
-            ax.set_ylim(0, 1)
-            ax.text(0, 0, f"${formula}$", fontsize=22, ha='left', va='bottom', wrap=True)
-            plt.savefig(output_path, bbox_inches='tight', pad_inches=0.1, transparent=True)
+            
+            # Устанавливаем правильный размер
+            fig.set_size_inches(width + 0.2, height + 0.2)  # Добавляем небольшой отступ
+            
+            # Сохраняем с прозрачным фоном
+            plt.savefig(output_path, format='png', 
+                    bbox_inches='tight', 
+                    pad_inches=0.1, 
+                    transparent=True,
+                    dpi=300)
         except Exception as e:
             plt.close(fig)
             raise RuntimeError(f"Ошибка при рендеринге формулы: {e}\nФормула: {formula}")
-        plt.close(fig)
-        # Check if file was created
-        if not os.path.exists(output_path):
-            raise RuntimeError(f"Не удалось сохранить изображение формулы: {output_path}")
+        finally:
+            plt.close(fig)
+        
         return output_path
 
 
@@ -474,7 +460,7 @@ class LlmBot:
 
 
     async def confirm_equation_handler(self, callback: CallbackQuery):
-        provider = self.providers.get("qwen3-8b")
+        provider = self.providers.get("ruadapt_qwen2.5_7b_ext_u48_instruct_gguf")
         print(provider)
         print(type(provider))
         if provider is None:
@@ -491,19 +477,15 @@ class LlmBot:
 
                 # 1. Поиск оптимального пути решения
                 solution_paths = await self._find_optimal_solution_path(equation_text, provider=provider )
-                print('################################################################### солюшен патх')
-                print(f"------------------------------------------------------{ solution_paths}----------------------------------------------------------")
+
                 best_path = solution_paths[0] if solution_paths else None
 
                 # 2. Генерация решения по оптимальному пути
                 solution_steps = await self._generate_solution_steps(equation_text, best_path, provider=provider)
-                print('################################################################### солюшен степ')
-                print(f"------------------------------------------------------{solution_steps}----------------------------------------------------------")
+
                 
                 # 3. Проверка промежуточных результатов
                 verified_steps = await self._verify_intermediate_steps(solution_steps, provider=provider)
-                print('################################################################### верифаед степы')
-                print(f"------------------------------------------------------{verified_steps}----------------------------------------------------------")
                 
                 # 4. Адаптация подхода если есть ошибки
                 if any(not step["is_correct"] for step in verified_steps):
@@ -577,7 +559,7 @@ class LlmBot:
         self.db.save_user_message(content, conv_id=conv_id, user_id=user_id, user_name=user_name)
 
         placeholder = await message.reply("⏳")
-        provider = self.providers["qwen3-8b"]
+        provider = self.providers["ruadapt_qwen2.5_7b_ext_u48_instruct_gguf"]
         try:
             # Получаем текущий предмет из базы данных
             current_table = self.db.get_current_subject(chat_id)
@@ -591,6 +573,7 @@ class LlmBot:
                
                 rag_promt = provider.rag_prompt
                 prompt = rag_promt.format(context=docs, question=content)
+                print(docs)
                 full_context = formatted_history + [{"role": "user", "content": prompt}]
                 print(rag_promt)
                 system_prompt = provider.rag_prompt
@@ -672,7 +655,7 @@ class LlmBot:
         provider: LLMProvider,
         messages: ChatMessages,
         system_prompt: str,
-        scheme: BaseModel,
+        scheme: type[BaseModel],
         num_retries: int = 2,
         **kwargs: Any
     ) -> str:
@@ -687,18 +670,19 @@ class LlmBot:
 
         
         casted_messages = [cast(ChatCompletionMessageParam, message) for message in messages]
-        answer: Optional[str] = None
+        answer: BaseModel | None = None
         for _ in range(num_retries):
             try:
                 chat_completion = await provider.api.beta.chat.completions.parse(
-                    model=provider.model_name, messages=casted_messages, response_format=scheme, temperature=0.2,  **kwargs
+                    model=provider.model_name, messages=casted_messages, response_format=scheme, temperature=0.5,  **kwargs
                 )
-                answer: scheme = chat_completion.choices[0].message.parsed
+                answer = chat_completion.choices[0].message.parsed
+                break
                 
             except Exception:
                 traceback.print_exc()
                 continue
-        assert answer
+        assert answer is not None
        
         return answer.model_dump_json(indent=2)
     
@@ -772,7 +756,7 @@ class LlmBot:
         
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"{problem}, /no_think"}
+            {"role": "user", "content": f"{problem}"}
         ]
         
         response = await self._query_api(provider, messages, system_prompt)
@@ -813,7 +797,7 @@ class LlmBot:
         
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content":f"{str(step)}, /no_think"}
+            {"role": "user", "content":f"{str(step)}"}
         ]
         
         try:
@@ -853,7 +837,7 @@ class LlmBot:
         Ответ: [формула или текст]"""
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Шаги: {verified_steps}, Выражение:{equation}, /no_think"}
+            {"role": "user", "content": f"Шаги: {verified_steps}, Выражение:{equation}"}
         ]
         try:
             response = await self._query_api(provider, messages, system_prompt)
@@ -892,7 +876,7 @@ class LlmBot:
         
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Задача: {problem}\nПрошлые попытки: {previous_attempts}, /no_think"}
+            {"role": "user", "content": f"Задача: {problem}\nПрошлые попытки: {previous_attempts}"}
         ]
         
         return await self._query_api(provider, messages, system_prompt)
@@ -940,77 +924,51 @@ class LlmBot:
         
         return formatted
 
-    async def _generate_solution_steps(self, equation: str, solution_path: str ,provider:LLMProvider) -> List[Dict[str, str]]:
-        """Генерация пошагового решения уравнения по заданному пути решения"""
-        if not provider:
-            return []
+    async def _generate_solution_steps(self, equation: str, solution_path: str, provider: LLMProvider) -> List[Dict[str, str]]:
+        """Генерация пошагового решения уравнения"""
+ 
         
-        system_prompt = """Сгенерируй  решение для этой задачи рассуждай шаг за шагом.
-        Для каждого шага:
-        1. Объясняи что ты делаешь и почему
-        2. Показывай математические операции
-        3. Включай промежуточные  результаты
-        4. Проверяй шаг на корректность
-        
-        Каждый шаг оформляй в таком стиле:
-        {
-            "explanation": "Четкое объяснение шага",
-            "calculation": "Математические операции и их результат",
-            "verification": "Как проверить этот шаг"
-        }
-
-        В конце добавь финальный ответ в формате:
-        {
-            "final_answer": "Итоговый ответ уравнения",
-        }
+        system_prompt = """
+        Сгенерируй решение для уравнения шаг за шагом. Для каждого шага:
+        - Объяснение: краткое пояснение шага
+        - Расчет: математические операции
+        - Проверка: как проверить шаг
+        В конце укажи итоговый ответ.
         """
         
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Задача: {equation}\nПуть решения: {solution_path}, /no_think"}
-        ]
+        user_prompt = f"Реши уравнение: {equation}\n\nМетод решения: {solution_path}"
         
         try:
-            response = await self._query_api_struct(scheme= Step_calc,provider=provider, messages=messages, system_prompt=system_prompt)
-            # Парсим ответ в список шагов
+            response = await self._query_api_struct(scheme= Step_calc,
+                provider=provider, 
+                messages=[{"role": "user", "content": user_prompt}],
+                system_prompt=system_prompt
+            )
+            
+            # Упрощенный парсинг ответа
             steps = []
-            current_step = {}
-            final_answer = None
-            
-            for line in response.split('\n'):
-                line = line.strip()
-                if not line:
-                    continue
+            for part in response.split("\n\n"):
+                if "шаг" in part.lower() or "step" in part.lower():
+                    step_data = {
+                        "explanation": "",
+                        "calculation": "",
+                        "verification": ""
+                    }
                     
-                if '"final_answer":' in line:
-                    # Нашли финальный ответ
-                    final_answer = line.split('"final_answer":')[1].strip().strip('",')
-                    continue
+                    # Парсим компоненты шага
+                    if "объяснение:" in part.lower():
+                        step_data["explanation"] = part.split("объяснение:")[1].split("\n")[0].strip()
+                    if "расчет:" in part.lower():
+                        step_data["calculation"] = part.split("расчет:")[1].split("\n")[0].strip()
+                    if "проверка:" in part.lower():
+                        step_data["verification"] = part.split("проверка:")[1].split("\n")[0].strip()
                     
-                if '"explanation":' in line:
-                    if current_step:
-                        steps.append(current_step)
-                    current_step = {"explanation": line.split('"explanation":')[1].strip().strip('",')}
-                elif '"calculation":' in line:
-                    current_step["calculation"] = line.split('"calculation":')[1].strip().strip('",')
-                elif '"verification":' in line:
-                    current_step["verification"] = line.split('"verification":')[1].strip().strip('",')
-            
-            if current_step:
-                steps.append(current_step)
-            
-            # Добавляем финальный ответ как отдельный шаг
-            if final_answer:
-                steps.append({
-                    "explanation": "Финальный ответ уравнения",
-                    "calculation": final_answer,
-                    "verification": "Проверка подстановкой в исходное уравнение"
-                })
+                    steps.append(step_data)
             
             return steps
         except Exception as e:
-            logging.error(f"Error generating solution steps: {str(e)}")
-            return []
+            logging.error(f"Ошибка генерации шагов: {str(e)}")
+            return [{"explanation": response}]
 
     def _parse_solution_paths(self, response: str) -> List[str]:
         """Парсинг ответа LLM в список путей решения"""
@@ -1065,4 +1023,3 @@ def main(
 
 if __name__ == "__main__":
     fire.Fire(main)
-

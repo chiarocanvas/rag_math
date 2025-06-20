@@ -17,10 +17,7 @@ class MathOCR:
         """
         try:
             logging.info("Загрузка модели и процессора для OCR...")
-            self.model = Qwen2VLForConditionalGeneration.from_pretrained(
-            "prithivMLmods/Qwen2-VL-OCR-2B-Instruct", torch_dtype="auto", device_map="auto"
-        )
-            self.processor = AutoProcessor.from_pretrained("prithivMLmods/Qwen2-VL-OCR-2B-Instruct")
+
             self.client = OpenAI(base_url="http://localhost:1234/v1", api_key="lm-studio")
             logging.info("Модель и процессор успешно загружены.")
         except Exception as e:
@@ -38,7 +35,7 @@ class MathOCR:
         
         if type_ocr == 'vlm':
             completion = self.client.chat.completions.create(
-                model="typhoon2-qwen2vl-7b-vision-instruct",
+                model="nanonets.nanonets-ocr-s",
                 messages=[
                     {
                         "role": "user",
@@ -47,18 +44,9 @@ class MathOCR:
                                 "type": "text",
                                 "text": r"""Ты — специализированный OCR для математических заданий. Твоя задача:
 1. Точно и полностью выписать всё математическое задание с изображения, включая формулы, условия, текстовые пояснения, ограничения и т.д.
-2. Не сокращай и не перефразируй текст — выпиши всё слово в слово, как на изображении.
-3. Сохрани все математические символы, индексы, степени, знаки, пробелы и форматирование.
-4. Не добавляй и не убирай ничего от себя.
-5. Не пытайся решить, упростить или объяснить задание.
-
-ПРАВИЛА ВЫВОДА:
-- Верни только полный текст задания, без пояснений и комментариев.
-- НЕ используй LaTeX-разделители ($, \\, \(, \), \[, \]) - выводи формулы как есть.
-- НЕ добавляй обратные слеши перед математическими функциями (sin, cos, tan и т.д.).
-- Сохрани все пробелы, переносы строк и форматирование как на изображении.
-- Не добавляй и не убирай ни одного символа.
-- Не исправляй опечатки, если они есть на изображении."""
+2. Не добавляй и не убирай ничего от себя.
+3. Верни только  уравнение, без пояснений и комментариев.
+."""
                             },
                             {
                                 "type": "image_url",
@@ -69,14 +57,5 @@ class MathOCR:
                 ],
             )
             result = completion.choices[0].message.content
-            # Удаляем LaTeX-разделители
-            result = result.replace('\\[', '').replace('\\]', '')
-            result = result.replace('\\(', '').replace('\\)', '')
-            result = result.replace('$$', '').replace('$', '')
-            
-            # Удаляем обратные слеши перед математическими функциями
-            math_functions = ['sin', 'cos', 'tan', 'cot', 'sec', 'csc', 'arcsin', 'arccos', 'arctan', 'log', 'ln', 'exp']
-            for func in math_functions:
-                result = result.replace(f'\\{func}', func)
-            
+            print(result)
             return result
